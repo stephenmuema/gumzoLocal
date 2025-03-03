@@ -27,7 +27,6 @@ _MODELS = {
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
     "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 }
-
 FRIENDLY_MODEL_NAMES = {
     "tiny.en": "Nano (English Only)",
     "tiny": "Nano Multilingual",
