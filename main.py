@@ -1,18 +1,18 @@
 import torch
 import tkinter as tk
-from tkinter import filedialog, ttk, scrolledtext
+from tkinter import filedialog, messagebox
 from faster_whisper import WhisperModel
 from deep_translator import GoogleTranslator
 import os
 import subprocess
 import threading
-from tkinter import messagebox
 import customtkinter as ctk
+import time
+import datetime
 
 # Set appearance mode and default color theme
-ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
-ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
-
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
 class GumzoAIApp(ctk.CTk):
     def __init__(self):
@@ -20,16 +20,23 @@ class GumzoAIApp(ctk.CTk):
 
         # Configure window
         self.title("Gumzo AI - Speech Transcription & Translation")
-        self.geometry("800x600")
+        self.geometry("850x650")
 
         # Variables
         self.file_path = ""
-        self.model_var = tk.StringVar(value="Gumzo AI Standard")
+        self.model_var = tk.StringVar(value="Gumzo AI Standard (Small)")
         self.model_language_var = tk.StringVar(value="All Languages")
         self.lang_var = tk.StringVar(value="None")
         self.processing = False
+        self.stream_var = tk.BooleanVar(value=True)
+        self.segments = []
+        self.transcription = ""
+        self.translation = ""
+        self.cancel_processing = False
+        self.streaming_buffer = []
+        self.audio_duration = 0
 
-        # Define model mappings
+        # Model mappings
         self._MODELS = {
             "tiny.en": "Systran/faster-whisper-tiny.en",
             "tiny": "Systran/faster-whisper-tiny",
@@ -51,7 +58,6 @@ class GumzoAIApp(ctk.CTk):
             "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
         }
 
-        # Create friendly name to model mapping
         self.model_friendly_names = {
             "Gumzo AI Basic (Tiny)": "tiny",
             "Gumzo AI Basic (English Only)": "tiny.en",
@@ -71,25 +77,28 @@ class GumzoAIApp(ctk.CTk):
             "Gumzo AI Flash (v3 Flash)": "large-v3-turbo"
         }
 
-        # Create UI elements
+        # Create UI
         self.create_ui()
 
     def create_ui(self):
-        # Main frame with padding
-        main_frame = ctk.CTkFrame(self)
-        main_frame.pack(padx=20, pady=20, fill="both", expand=True)
+        # Create a scrollable frame
+        self.main_container = ctk.CTkScrollableFrame(self)
+        self.main_container.pack(padx=10, pady=10, fill="both", expand=True)
 
-        # App title and description
+        # Main frame - now inside the scrollable container
+        main_frame = ctk.CTkFrame(self.main_container)
+        main_frame.pack(padx=10, pady=10, fill="both", expand=True)
+        # Header
         title_label = ctk.CTkLabel(main_frame, text="Gumzo AI Transcription",
-                                   font=ctk.CTkFont(size=24, weight="bold"))
+                                 font=ctk.CTkFont(size=24, weight="bold"))
         title_label.pack(pady=(0, 10))
 
         description = ctk.CTkLabel(main_frame,
-                                   text="Convert speech to text and translate to different languages",
-                                   font=ctk.CTkFont(size=14))
+                                 text="Convert speech to text and translate to different languages",
+                                 font=ctk.CTkFont(size=14))
         description.pack(pady=(0, 20))
 
-        # File selection frame
+        # File selection
         file_frame = ctk.CTkFrame(main_frame)
         file_frame.pack(padx=10, pady=10, fill="x")
 
@@ -102,96 +111,120 @@ class GumzoAIApp(ctk.CTk):
         browse_btn = ctk.CTkButton(file_frame, text="Browse", command=self.browse_file)
         browse_btn.pack(side="left", padx=5)
 
-        # Settings frame
+        # Settings
         settings_frame = ctk.CTkFrame(main_frame)
         settings_frame.pack(padx=10, pady=10, fill="x")
 
         # Model selection
-        model_label = ctk.CTkLabel(settings_frame, text="Model:")
+        model_frame = ctk.CTkFrame(settings_frame)
+        model_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        model_label = ctk.CTkLabel(model_frame, text="Model:")
         model_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
-        models = list(self.model_friendly_names.keys())
-        models.sort()  # Sort alphabetically
-
-        # Group models by category for the dropdown
-        basic_models = [m for m in models if "Basic" in m]
-        starter_models = [m for m in models if "Starter" in m]
-        standard_models = [m for m in models if "Standard" in m]
-        premium_models = [m for m in models if "Premium" in m]
-        pro_models = [m for m in models if "Pro" in m]
-        lite_models = [m for m in models if "Lite" in m]
-        turbo_models = [m for m in models if "Turbo" in m]
-
-        # Combine in logical order
-        ordered_models = basic_models + starter_models + standard_models + premium_models + lite_models + pro_models + turbo_models
-
-        model_dropdown = ctk.CTkOptionMenu(settings_frame, variable=self.model_var, values=ordered_models, width=300)
+        models = sorted(self.model_friendly_names.keys(), key=lambda x: ("Basic" in x, "Starter" in x,
+                                                                       "Standard" in x, "Premium" in x,
+                                                                       "Pro" in x, "Lite" in x, "Flash" in x))
+        model_dropdown = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, width=300)
         model_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="w")
 
         # Language selection
-        lang_label = ctk.CTkLabel(settings_frame, text="Translate to:")
-        lang_label.grid(row=1, column=0, padx=10, pady=10, sticky="w")
+        lang_frame = ctk.CTkFrame(settings_frame)
+        lang_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
 
-        languages = [
-            "None",
-            "English (en)",
-            "French (fr)",
-            "Spanish (es)",
-            "German (de)",
-            "Chinese (zh)",
-            "Arabic (ar)",
-            "Russian (ru)",
-            "Swahili (sw)",
-            "Japanese (ja)",
-            "Korean (ko)",
-            "Portuguese (pt)",
-            "Italian (it)",
-            "Dutch (nl)",
-            "Hindi (hi)",
-            "Turkish (tr)",
-            "Thai (th)",
-            "Vietnamese (vi)"
-        ]
+        lang_label = ctk.CTkLabel(lang_frame, text="Translate to:")
+        lang_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
-        lang_dropdown = ctk.CTkOptionMenu(settings_frame, variable=self.lang_var, values=languages, width=300)
-        lang_dropdown.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+        languages = ["None", "English (en)", "French (fr)", "Spanish (es)", "German (de)",
+                   "Chinese (zh)", "Arabic (ar)", "Russian (ru)", "Swahili (sw)",
+                   "Japanese (ja)", "Korean (ko)", "Portuguese (pt)", "Italian (it)",
+                   "Dutch (nl)", "Hindi (hi)", "Turkish (tr)", "Thai (th)", "Vietnamese (vi)"]
 
-        # Model info
+        lang_dropdown = ctk.CTkOptionMenu(lang_frame, variable=self.lang_var, values=languages, width=150)
+        lang_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="w")
+
+        settings_frame.grid_columnconfigure(0, weight=1)
+        settings_frame.grid_columnconfigure(1, weight=1)
+
         self.model_info_text = ctk.CTkLabel(main_frame, text="", font=ctk.CTkFont(size=12))
         self.model_info_text.pack(padx=10, pady=5, anchor="w")
-        self.update_model_info()  # Initialize with current model
-
-        # Add a trace to update info when model changes
+        self.update_model_info()
         self.model_var.trace_add("write", lambda *args: self.update_model_info())
 
-        # Process button with progress indicator
+        # Buttons
         button_frame = ctk.CTkFrame(main_frame)
-        button_frame.pack(padx=10, pady=10, fill="x")
+        button_frame.pack(padx=10, pady=5, fill="x")
 
         self.process_btn = ctk.CTkButton(
             button_frame,
             text="Transcribe & Translate",
             command=self.start_processing,
             font=ctk.CTkFont(weight="bold"),
-            height=40
+            height=40,
+            width=200
         )
-        self.process_btn.pack(pady=10)
+        self.process_btn.pack(side="left", padx=10, pady=10)
 
-        self.progress_bar = ctk.CTkProgressBar(button_frame)
-        self.progress_bar.pack(pady=(0, 10), fill="x", padx=40)
+        self.cancel_btn = ctk.CTkButton(
+            button_frame,
+            text="Cancel",
+            command=self.cancel_processing_task,
+            font=ctk.CTkFont(weight="bold"),
+            height=40,
+            width=100,
+            fg_color="#d32f2f",
+            hover_color="#b71c1c"
+        )
+        self.cancel_btn.pack(side="left", padx=10, pady=10)
+        self.cancel_btn.configure(state="disabled")
+
+        # Progress
+        self.progress_frame = ctk.CTkFrame(main_frame)
+        self.progress_frame.pack(padx=10, pady=5, fill="x")
+
+        self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
+        self.progress_bar.pack(pady=5, fill="x", padx=10)
         self.progress_bar.set(0)
 
-        # Results area
+        # Results
         results_frame = ctk.CTkFrame(main_frame)
-        results_frame.pack(padx=10, pady=10, fill="both", expand=True)
+        results_frame.pack(padx=10, pady=5, fill="both", expand=True)
 
-        results_label = ctk.CTkLabel(results_frame, text="Results:", anchor="w")
-        results_label.pack(padx=10, pady=(10, 5), anchor="w")
+        self.results_tabs = ctk.CTkTabview(results_frame)
+        self.results_tabs.pack(padx=5, pady=5, fill="both", expand=True)
 
-        self.results_text = ctk.CTkTextbox(results_frame, wrap="word", height=300)
-        self.results_text.pack(padx=10, pady=5, fill="both", expand=True)
+        self.transcript_tab = self.results_tabs.add("Transcript")
+        self.translation_tab = self.results_tabs.add("Translation")
 
-        # Status bar
+        self.transcript_text = ctk.CTkTextbox(self.transcript_tab, wrap="word", height=200)
+        self.transcript_text.pack(padx=5, pady=5, fill="both", expand=True)
+
+        self.translation_text = ctk.CTkTextbox(self.translation_tab, wrap="word", height=200)
+        self.translation_text.pack(padx=5, pady=5, fill="both", expand=True)
+
+        # Export
+        export_frame = ctk.CTkFrame(main_frame)
+        export_frame.pack(padx=10, pady=5, fill="x")
+
+        export_txt_btn = ctk.CTkButton(
+            export_frame,
+            text="Export as TXT",
+            command=self.export_txt,
+            height=30,
+            width=120
+        )
+        export_txt_btn.pack(side="left", padx=10, pady=10)
+
+        export_srt_btn = ctk.CTkButton(
+            export_frame,
+            text="Export as SRT",
+            command=self.export_srt,
+            height=30,
+            width=120
+        )
+        export_srt_btn.pack(side="left", padx=10, pady=10)
+
+        # Status
         self.status_var = tk.StringVar(value="Ready")
         status_bar = ctk.CTkLabel(self, textvariable=self.status_var, anchor="w")
         status_bar.pack(side="bottom", fill="x", padx=10, pady=5)
@@ -199,35 +232,26 @@ class GumzoAIApp(ctk.CTk):
     def update_model_info(self):
         model_name = self.model_var.get()
         model_key = self.model_friendly_names.get(model_name, "small")
-
-        # Model descriptions
-        model_descriptions = {
-            "tiny": "Smallest model, fastest inference, lower accuracy",
-            "tiny.en": "Smallest model optimized for English only",
-            "base": "Basic model with balanced performance",
-            "base.en": "Basic model optimized for English only",
-            "small": "Good balance of accuracy and speed",
-            "small.en": "Good performance optimized for English only",
-            "medium": "High accuracy with moderate speed",
-            "medium.en": "High accuracy optimized for English only",
-            "large-v1": "High accuracy, first generation large model",
-            "large-v2": "Very high accuracy, second generation",
-            "large-v3": "State-of-the-art accuracy, third generation",
-            "distil-large-v2": "Faster inference with slightly lower accuracy than large-v2",
-            "distil-medium.en": "Distilled medium model for faster English processing",
-            "distil-small.en": "Distilled small model for faster English processing",
-            "distil-large-v3": "Faster inference with slightly lower accuracy than large-v3",
-            "large-v3-turbo": "Optimized for faster inference with similar quality to large-v3"
+        descriptions = {
+            "tiny": "Fastest but least accurate (multilingual)",
+            "tiny.en": "Fastest English-only model",
+            "base": "Balance of speed and accuracy (multilingual)",
+            "base.en": "Base English-only model",
+            "small": "Recommended for most users (multilingual)",
+            "small.en": "Small English-only model",
+            "medium": "High accuracy (multilingual)",
+            "medium.en": "Medium English-only model",
+            "large-v1": "Original large model (v1)",
+            "large-v2": "Improved large model (v2)",
+            "large-v3": "Latest large model (v3)",
+            "distil-large-v2": "Distilled version of large-v2",
+            "distil-large-v3": "Distilled version of large-v3",
+            "distil-medium.en": "Distilled medium English model",
+            "distil-small.en": "Distilled small English model",
+            "large-v3-turbo": "Optimized for fast inference"
         }
-
-        # Update the info text
-        info = model_descriptions.get(model_key, "")
-        model_path = self._MODELS.get(model_key, "")
-
-        # Check if it's an English-only model
-        is_english = ".en" in model_key
-        lang_info = " (English only)" if is_english else " (Multilingual)"
-
+        lang_info = " (English only)" if ".en" in model_key else " (Multilingual)"
+        info = descriptions.get(model_key, "Good balance of speed and accuracy")
         self.model_info_text.configure(text=f"Selected: {model_name}{lang_info}\n{info}")
 
     def browse_file(self):
@@ -242,134 +266,184 @@ class GumzoAIApp(ctk.CTk):
         if self.processing:
             return
 
-        self.file_path = self.entry_file_path.get()
-
         if not self.file_path:
             messagebox.showerror("Error", "Please select an audio or video file.")
             return
 
-        # Disable the button and show progress
-        self.process_btn.configure(state="disabled", text="Processing...")
+        # Reset state
+        self.transcript_text.delete("1.0", "end")
+        self.translation_text.delete("1.0", "end")
+        self.segments = []
+        self.transcription = ""
+        self.translation = ""
+        self.cancel_processing = False
+        self.streaming_buffer = []
+
+        # UI updates
+        self.process_btn.configure(state="disabled")
+        self.cancel_btn.configure(state="normal")
         self.progress_bar.set(0.05)
         self.status_var.set("Processing file...")
         self.processing = True
 
-        # Start processing in a separate thread
+        # Start processing thread
         threading.Thread(target=self.process_media, daemon=True).start()
 
-    def get_model_size(self, model_name):
-        # Get the actual model key from the friendly name
-        return self.model_friendly_names.get(model_name, "small")
+    def cancel_processing_task(self):
+        if self.processing:
+            self.cancel_processing = True
+            self.status_var.set("Cancelling...")
+
+    def estimate_total_duration(self, audio_path):
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                audio_path
+            ], capture_output=True, text=True)
+            return float(result.stdout.strip())
+        except:
+            return 60  # Fallback duration
 
     def process_media(self):
         try:
-            # Extract language code from selection
+            # Convert video to audio if needed
+            if self.file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
+                self.status_var.set("Converting video to audio...")
+                audio_path = self.file_path.rsplit(".", 1)[0] + ".wav"
+                subprocess.run(["ffmpeg", "-i", self.file_path, "-q:a", "0", "-map", "a", audio_path, "-y"], check=True)
+            else:
+                audio_path = self.file_path
+
+            # Get audio duration for progress calculation
+            self.audio_duration = self.estimate_total_duration(audio_path)
+
+            # Model initialization
+            model_key = self.model_friendly_names.get(self.model_var.get(), "small")
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.status_var.set(f"Loading {model_key} model on {device}...")
+            default = os.path.join(os.path.expanduser("~"), ".cache")
+            download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "gumzo")
+            os.makedirs(download_root, exist_ok=True)
+            model = WhisperModel(model_key, device=device,download_root=download_root)
+
+            # Language setup
             lang_selection = self.lang_var.get()
             target_lang = None if lang_selection == "None" else lang_selection.split("(")[-1].strip(")")
+            is_english_model = ".en" in model_key
+            language = "en" if is_english_model else None
 
-            # Get model size
-            model_key = self.get_model_size(self.model_var.get())
-
+            # Transcription parameters
+            stream_mode = self.stream_var.get()
+            self.status_var.set("Starting transcription...")
             self.progress_bar.set(0.1)
-            self.status_var.set(f"Initializing {self.model_var.get()} model...")
 
-            # Transcribe and translate
-            transcription, translation = self.transcribe_and_translate(
-                self.file_path,
-                model_size=model_key,
-                target_lang=target_lang
+            # Process transcription
+            full_transcription = ""
+            translated_text = ""
+            segments = []
+
+            segment_generator, info = model.transcribe(
+                audio_path,
+                language=language,
+                beam_size=5
             )
 
-            # Update UI with results
-            self.results_text.delete("0.0", "end")
+            # Convert generator to list before processing
+            segments = list(segment_generator)
+            full_transcription = " ".join([seg.text for seg in segments])
 
-            if transcription:
-                self.results_text.insert("end", "📝 Transcription:\n\n")
-                self.results_text.insert("end", f"{transcription}\n\n")
+            # Update UI once
+            self.transcript_text.insert("end", full_transcription)
 
-            if translation:
-                self.results_text.insert("end", "🌐 Translation:\n\n")
-                self.results_text.insert("end", f"{translation}\n")
+            # Translation after full transcription
+            if target_lang and full_transcription.strip():
+                try:
+                    translated_text = GoogleTranslator(
+                        source="auto",
+                        target=target_lang
+                    ).translate(full_transcription)
+                    self.translation_text.insert("end", translated_text)
+                except Exception as e:
+                    translated_text = f"Translation error: {str(e)}"
+                    self.translation_text.insert("end", translated_text)
 
+            # Final updates
+            self.segments = segments
+            self.transcription = full_transcription.strip()
+            self.translation = translated_text.strip()
             self.progress_bar.set(1.0)
-            self.status_var.set("Processing complete!")
+            self.status_var.set("Processing complete!" if not self.cancel_processing else "Processing cancelled")
 
         except Exception as e:
-            self.results_text.delete("0.0", "end")
-            self.results_text.insert("end", f"Error: {str(e)}")
-            self.status_var.set("Error occurred during processing")
-            messagebox.showerror("Error", f"An error occurred: {str(e)}")
-
+            self.status_var.set(f"Error: {str(e)}")
+            messagebox.showerror("Error", f"Processing failed: {str(e)}")
         finally:
-            # Re-enable the button
-            self.process_btn.configure(state="normal", text="Transcribe & Translate")
             self.processing = False
+            self.process_btn.configure(state="normal")
+            self.cancel_btn.configure(state="disabled")
 
-    def transcribe_and_translate(self, file_path, model_size="small", target_lang=None):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        self.status_var.set(f"Loading model {model_size} on {device}...")
-        self.progress_bar.set(0.2)
-
-        # Get the actual model path
-        model_path = self._MODELS.get(model_size, self._MODELS["small"])
-
-        model = WhisperModel(model_size, device=device, download_root=None)
-
-        # Convert video to audio if necessary
-        if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
-            self.status_var.set("Converting video to audio...")
-            self.progress_bar.set(0.3)
-
-            audio_path = file_path.rsplit(".", 1)[0] + ".wav"
-            subprocess.run(["ffmpeg", "-i", file_path, "-q:a", "0", "-map", "a", audio_path, "-y"], check=True)
-        else:
-            audio_path = file_path
-
-        self.status_var.set("Transcribing audio...")
-        self.progress_bar.set(0.4)
-
-        # Determine if we should use English-only mode
-        is_english_model = ".en" in model_size
-        language = "en" if is_english_model else None
-
-        segments, info = model.transcribe(audio_path, language=language)
-
-        # Update status with detected language
-        detected_lang = info.language
-        self.status_var.set(f"Detected language: {detected_lang}")
-        self.progress_bar.set(0.7)
-
-        full_transcription = "".join(segment.text + " " for segment in segments).strip()
-
-        translated_text = None
-        if target_lang and target_lang != detected_lang:
-            self.status_var.set(f"Translating to {target_lang}...")
-            self.progress_bar.set(0.8)
-
-            translated_text = GoogleTranslator(source="auto", target=target_lang).translate(full_transcription)
-
-        self.progress_bar.set(0.9)
-        return full_transcription, translated_text
-
-
-def main():
-    # Check if required libraries are installed
-    try:
-        import customtkinter
-    except ImportError:
-        # If not installed, show message and try to install
-        if messagebox.askyesno(
-                "Missing Library",
-                "CustomTkinter is required but not installed. Would you like to install it now?"
-        ):
-            subprocess.run(["pip", "install", "customtkinter"])
-            messagebox.showinfo("Installation", "Please restart the application.")
+    def export_txt(self):
+        if not self.transcription:
+            messagebox.showinfo("Export", "No transcription available to export.")
             return
 
+        try:
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text Files", "*.txt")],
+                initialfile=os.path.basename(self.file_path).rsplit(".", 1)[0] + "_transcript.txt"
+            )
+
+            if not file_path:
+                return
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(self.transcription)
+                if self.translation:
+                    f.write("\n\n--- TRANSLATION ---\n\n")
+                    f.write(self.translation)
+
+            messagebox.showinfo("Export", f"Exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export: {str(e)}")
+
+    def export_srt(self):
+        if not self.segments:
+            messagebox.showinfo("Export", "No segments available for SRT export.")
+            return
+
+        try:
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".srt",
+                filetypes=[("SRT Files", "*.srt")],
+                initialfile=os.path.basename(self.file_path).rsplit(".", 1)[0] + ".srt"
+            )
+
+            if not file_path:
+                return
+
+            with open(file_path, 'w', encoding='utf-8') as f:
+                for i, seg in enumerate(self.segments, 1):
+                    start = self.format_srt_time(seg.start)
+                    end = self.format_srt_time(seg.end)
+                    f.write(f"{i}\n{start} --> {end}\n{seg.text}\n\n")
+
+            messagebox.showinfo("Export", f"SRT file exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export SRT: {str(e)}")
+
+    def format_srt_time(self, seconds):
+        td = datetime.timedelta(seconds=seconds)
+        hours, remainder = divmod(td.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        milliseconds = int((seconds % 1) * 1000)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+def main():
     app = GumzoAIApp()
     app.mainloop()
-
 
 if __name__ == "__main__":
     main()
