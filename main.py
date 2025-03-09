@@ -356,7 +356,7 @@ class GumzoAIApp(ctk.CTk):
             self.audio_duration = self.estimate_total_duration(audio_path)
             model_key = self.model_friendly_names.get(self.model_var.get(), "small")
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.status_var.set(f"Loading {model_key} model on {device}...")
+            self.status_var.set(f"Loading model on {device}...")
             default = os.path.join(os.path.expanduser("~"), ".cache")
             download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "gumzo")
             os.makedirs(download_root, exist_ok=True)
@@ -438,7 +438,7 @@ class GumzoAIApp(ctk.CTk):
             duration = 5
             model_key = self.model_friendly_names.get(self.model_var.get(), "small")
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.status_var.set(f"Loading {model_key} model on {device} for realtime transcription...")
+            self.status_var.set(f"Loading model on {device} for realtime transcription...")
             default = os.path.join(os.path.expanduser("~"), ".cache")
             download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "gumzo")
             os.makedirs(download_root, exist_ok=True)
