@@ -10,6 +10,8 @@ import threading
 import customtkinter as ctk
 import time
 import datetime
+import sounddevice as sd
+import soundfile as sf
 
 # Set appearance mode and default color theme
 ctk.set_appearance_mode("System")
@@ -36,6 +38,9 @@ class GumzoAIApp(ctk.CTk):
         self.cancel_processing = False
         self.streaming_buffer = []
         self.audio_duration = 0
+
+        # New: Input source selection variable ("File" or "Realtime")
+        self.input_source_var = tk.StringVar(value="File")
 
         # Model mappings
         self._MODELS = {
@@ -89,17 +94,30 @@ class GumzoAIApp(ctk.CTk):
         # Main frame - now inside the scrollable container
         main_frame = ctk.CTkFrame(self.main_container)
         main_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
         # Header
         title_label = ctk.CTkLabel(main_frame, text="Gumzo AI Transcription",
-                                 font=ctk.CTkFont(size=24, weight="bold"))
+                                   font=ctk.CTkFont(size=24, weight="bold"))
         title_label.pack(pady=(0, 10))
 
         description = ctk.CTkLabel(main_frame,
-                                 text="Convert speech to text and translate to different languages",
-                                 font=ctk.CTkFont(size=14))
+                                   text="Convert speech to text and translate to different languages",
+                                   font=ctk.CTkFont(size=14))
         description.pack(pady=(0, 20))
 
-        # File selection
+        # --- New: Input Source Selection ---
+        input_source_frame = ctk.CTkFrame(main_frame)
+        input_source_frame.pack(padx=10, pady=10, fill="x")
+
+        input_source_label = ctk.CTkLabel(input_source_frame, text="Input Source:")
+        input_source_label.pack(side="left", padx=(10, 5))
+
+        file_radio = ctk.CTkRadioButton(input_source_frame, text="File", variable=self.input_source_var, value="File")
+        file_radio.pack(side="left", padx=5)
+        mic_radio = ctk.CTkRadioButton(input_source_frame, text="Realtime (Microphone)", variable=self.input_source_var, value="Realtime")
+        mic_radio.pack(side="left", padx=5)
+
+        # File selection (only used when File is chosen)
         file_frame = ctk.CTkFrame(main_frame)
         file_frame.pack(padx=10, pady=10, fill="x")
 
@@ -124,8 +142,8 @@ class GumzoAIApp(ctk.CTk):
         model_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
 
         models = sorted(self.model_friendly_names.keys(), key=lambda x: ("Basic" in x, "Starter" in x,
-                                                                       "Standard" in x, "Premium" in x,
-                                                                       "Pro" in x, "Lite" in x, "Flash" in x))
+                                                                           "Standard" in x, "Premium" in x,
+                                                                           "Pro" in x, "Lite" in x, "Flash" in x))
         model_dropdown = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, width=300)
         model_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="w")
 
@@ -269,11 +287,7 @@ class GumzoAIApp(ctk.CTk):
         if self.processing:
             return
 
-        if not self.file_path:
-            messagebox.showerror("Error", "Please select an audio or video file.")
-            return
-
-        # Reset state
+        # Reset state and UI elements
         self.transcript_text.delete("1.0", "end")
         self.translation_text.delete("1.0", "end")
         self.segments = []
@@ -281,16 +295,26 @@ class GumzoAIApp(ctk.CTk):
         self.translation = ""
         self.cancel_processing = False
         self.streaming_buffer = []
+        self.progress_bar.set(0.0)
 
-        # UI updates
         self.process_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
-        self.progress_bar.set(0.05)
-        self.status_var.set("Processing file...")
-        self.processing = True
 
-        # Start processing thread
-        threading.Thread(target=self.process_media, daemon=True).start()
+        # Determine input source and start appropriate processing
+        if self.input_source_var.get() == "File":
+            if not self.file_path:
+                messagebox.showerror("Error", "Please select an audio or video file.")
+                self.process_btn.configure(state="normal")
+                self.cancel_btn.configure(state="disabled")
+                return
+
+            self.status_var.set("Processing file...")
+            self.processing = True
+            threading.Thread(target=self.process_media, daemon=True).start()
+        else:  # Realtime (Microphone) mode
+            self.status_var.set("Starting realtime transcription...")
+            self.processing = True
+            threading.Thread(target=self.realtime_transcription, daemon=True).start()
 
     def cancel_processing_task(self):
         if self.processing:
@@ -427,6 +451,64 @@ class GumzoAIApp(ctk.CTk):
             self.processing = False
             self.process_btn.configure(state="normal")
             self.cancel_btn.configure(state="disabled")
+
+    def realtime_transcription(self):
+        try:
+            # Setup parameters for realtime recording
+            sample_rate = 16000  # recommended sample rate for Whisper
+            duration = 5  # seconds per chunk
+
+            # Initialize model for realtime transcription
+            model_key = self.model_friendly_names.get(self.model_var.get(), "small")
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.status_var.set(f"Loading {model_key} model on {device} for realtime transcription...")
+            default = os.path.join(os.path.expanduser("~"), ".cache")
+            download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "gumzo")
+            os.makedirs(download_root, exist_ok=True)
+            model = WhisperModel(model_key, device=device, download_root=download_root)
+
+            self.status_var.set("Realtime transcription started. Speak into your microphone...")
+            while not self.cancel_processing:
+                # Record audio from the microphone
+                self.status_var.set("Recording...")
+                recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+                sd.wait()  # Wait until recording is finished
+
+                # Write the recording to a temporary file
+                temp_audio_path = "temp_realtime.wav"
+                sf.write(temp_audio_path, recording, sample_rate)
+
+                # Transcribe the recorded chunk
+                self.status_var.set("Transcribing...")
+                segment_generator, info = model.transcribe(temp_audio_path, language=None, beam_size=5)
+                segments = list(segment_generator)
+                if segments:
+                    chunk_text = " ".join([seg.text for seg in segments])
+                    # Append to transcript text box
+                    self.transcript_text.insert("end", chunk_text + "\n")
+                    self.transcript_text.see("end")
+                    # If translation is selected, translate this chunk
+                    lang_selection = self.lang_var.get()
+                    if lang_selection != "None":
+                        target_lang = lang_selection.split("(")[-1].strip(")")
+                        try:
+                            translated = GoogleTranslator(source="auto", target=target_lang).translate(chunk_text)
+                            self.translation_text.insert("end", translated + "\n")
+                            self.translation_text.see("end")
+                        except Exception as e:
+                            self.translation_text.insert("end", f"\n[Translation Error: {str(e)}]\n")
+                            self.translation_text.see("end")
+                # Small pause before the next recording
+                time.sleep(0.2)
+            self.status_var.set("Realtime transcription stopped.")
+        except Exception as e:
+            self.status_var.set(f"Error in realtime transcription: {str(e)}")
+            messagebox.showerror("Realtime Transcription Error", f"{str(e)}")
+        finally:
+            self.processing = False
+            self.process_btn.configure(state="normal")
+            self.cancel_btn.configure(state="disabled")
+
     def export_txt(self):
         if not self.transcription:
             messagebox.showinfo("Export", "No transcription available to export.")
