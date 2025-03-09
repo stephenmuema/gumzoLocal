@@ -64,6 +64,7 @@ class GumzoAIApp(ctk.CTk):
             "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
         }
 
+        # Model friendly names to be shown in the dropdown
         self.model_friendly_names = {
             "Gumzo AI Basic (Tiny)": "tiny",
             "Gumzo AI Basic (English Only)": "tiny.en",
@@ -81,6 +82,26 @@ class GumzoAIApp(ctk.CTk):
             "Gumzo AI Lite (Distilled Medium - English)": "distil-medium.en",
             "Gumzo AI Lite (Distilled Small - English)": "distil-small.en",
             "Gumzo AI Flash (v3 Flash)": "large-v3-turbo"
+        }
+
+        # Define ranking (lower numbers = better accuracy)
+        self.model_ranking = {
+            "Gumzo AI Pro (v3)": 1,
+            "Gumzo AI Pro (v2)": 2,
+            "Gumzo AI Pro (v1)": 3,
+            "Gumzo AI Flash (v3 Flash)": 4,
+            "Gumzo AI Pro (Distilled v3)": 5,
+            "Gumzo AI Pro (Distilled v2)": 6,
+            "Gumzo AI Premium (Medium)": 7,
+            "Gumzo AI Premium (English Only)": 7.1,
+            "Gumzo AI Standard (Small)": 8,
+            "Gumzo AI Standard (English Only)": 8.1,
+            "Gumzo AI Lite (Distilled Medium - English)": 9,
+            "Gumzo AI Lite (Distilled Small - English)": 10,
+            "Gumzo AI Starter (Base)": 11,
+            "Gumzo AI Starter (English Only)": 11.1,
+            "Gumzo AI Basic (Tiny)": 12,
+            "Gumzo AI Basic (English Only)": 12.1,
         }
 
         # Create UI
@@ -105,67 +126,54 @@ class GumzoAIApp(ctk.CTk):
                                    font=ctk.CTkFont(size=14))
         description.pack(pady=(0, 20))
 
-        # --- New: Input Source Selection ---
+        # --- Input Source Selection ---
         input_source_frame = ctk.CTkFrame(main_frame)
         input_source_frame.pack(padx=10, pady=10, fill="x")
-
         input_source_label = ctk.CTkLabel(input_source_frame, text="Input Source:")
         input_source_label.pack(side="left", padx=(10, 5))
-
         file_radio = ctk.CTkRadioButton(input_source_frame, text="File", variable=self.input_source_var, value="File")
         file_radio.pack(side="left", padx=5)
         mic_radio = ctk.CTkRadioButton(input_source_frame, text="Realtime (Microphone)", variable=self.input_source_var, value="Realtime")
         mic_radio.pack(side="left", padx=5)
 
+        # Trace changes to input_source_var to update file selector visibility
+        self.input_source_var.trace_add("write", self.toggle_file_selector)
+
         # File selection (only used when File is chosen)
-        file_frame = ctk.CTkFrame(main_frame)
-        file_frame.pack(padx=10, pady=10, fill="x")
-
-        file_label = ctk.CTkLabel(file_frame, text="Audio/Video File:")
+        self.file_frame = ctk.CTkFrame(main_frame)
+        self.file_frame.pack(padx=10, pady=10, fill="x")
+        file_label = ctk.CTkLabel(self.file_frame, text="Audio/Video File:")
         file_label.pack(side="left", padx=(10, 5))
-
-        self.entry_file_path = ctk.CTkEntry(file_frame, width=400)
+        self.entry_file_path = ctk.CTkEntry(self.file_frame, width=400)
         self.entry_file_path.pack(side="left", padx=5, fill="x", expand=True)
-
-        browse_btn = ctk.CTkButton(file_frame, text="Browse", command=self.browse_file)
+        browse_btn = ctk.CTkButton(self.file_frame, text="Browse", command=self.browse_file)
         browse_btn.pack(side="left", padx=5)
 
-        # Settings
-        settings_frame = ctk.CTkFrame(main_frame)
-        settings_frame.pack(padx=10, pady=10, fill="x")
+        # Settings (store as instance variable for ordering)
+        self.settings_frame = ctk.CTkFrame(main_frame)
+        self.settings_frame.pack(padx=10, pady=10, fill="x")
 
         # Model selection
-        model_frame = ctk.CTkFrame(settings_frame)
+        model_frame = ctk.CTkFrame(self.settings_frame)
         model_frame.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-
         model_label = ctk.CTkLabel(model_frame, text="Model:")
         model_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-
-        models = sorted(self.model_friendly_names.keys(), key=lambda x: ("Basic" in x, "Starter" in x,
-                                                                           "Standard" in x, "Premium" in x,
-                                                                           "Pro" in x, "Lite" in x, "Flash" in x))
+        # Sort models using our ranking dictionary (best to worst)
+        models = sorted(self.model_friendly_names.keys(), key=lambda x: self.model_ranking.get(x, 100))
         model_dropdown = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, width=300)
         model_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="w")
 
         # Language selection
-        lang_frame = ctk.CTkFrame(settings_frame)
+        lang_frame = ctk.CTkFrame(self.settings_frame)
         lang_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
-
         lang_label = ctk.CTkLabel(lang_frame, text="Translate to:")
         lang_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-        # Get supported languages as {name: code} dictionary
         lang_dict = GoogleTranslator().get_supported_languages(as_dict=True)
-
-        # Generate formatted list sorted alphabetically
-        languages = ["None"] + [
-            f"{name} ({code})"
-            for name, code in sorted(lang_dict.items(), key=lambda x: x[0])
-        ]
+        languages = ["None"] + [f"{name} ({code})" for name, code in sorted(lang_dict.items(), key=lambda x: x[0])]
         lang_dropdown = ctk.CTkOptionMenu(lang_frame, variable=self.lang_var, values=languages, width=150)
         lang_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="w")
-
-        settings_frame.grid_columnconfigure(0, weight=1)
-        settings_frame.grid_columnconfigure(1, weight=1)
+        self.settings_frame.grid_columnconfigure(0, weight=1)
+        self.settings_frame.grid_columnconfigure(1, weight=1)
 
         self.model_info_text = ctk.CTkLabel(main_frame, text="", font=ctk.CTkFont(size=12))
         self.model_info_text.pack(padx=10, pady=5, anchor="w")
@@ -175,7 +183,6 @@ class GumzoAIApp(ctk.CTk):
         # Buttons
         button_frame = ctk.CTkFrame(main_frame)
         button_frame.pack(padx=10, pady=5, fill="x")
-
         self.process_btn = ctk.CTkButton(
             button_frame,
             text="Transcribe & Translate",
@@ -185,7 +192,6 @@ class GumzoAIApp(ctk.CTk):
             width=200
         )
         self.process_btn.pack(side="left", padx=10, pady=10)
-
         self.cancel_btn = ctk.CTkButton(
             button_frame,
             text="Cancel",
@@ -202,7 +208,6 @@ class GumzoAIApp(ctk.CTk):
         # Progress
         self.progress_frame = ctk.CTkFrame(main_frame)
         self.progress_frame.pack(padx=10, pady=5, fill="x")
-
         self.progress_bar = ctk.CTkProgressBar(self.progress_frame)
         self.progress_bar.pack(pady=5, fill="x", padx=10)
         self.progress_bar.set(0)
@@ -210,23 +215,18 @@ class GumzoAIApp(ctk.CTk):
         # Results
         results_frame = ctk.CTkFrame(main_frame)
         results_frame.pack(padx=10, pady=5, fill="both", expand=True)
-
         self.results_tabs = ctk.CTkTabview(results_frame)
         self.results_tabs.pack(padx=5, pady=5, fill="both", expand=True)
-
         self.transcript_tab = self.results_tabs.add("Transcript")
         self.translation_tab = self.results_tabs.add("Translation")
-
         self.transcript_text = ctk.CTkTextbox(self.transcript_tab, wrap="word", height=200)
         self.transcript_text.pack(padx=5, pady=5, fill="both", expand=True)
-
         self.translation_text = ctk.CTkTextbox(self.translation_tab, wrap="word", height=200)
         self.translation_text.pack(padx=5, pady=5, fill="both", expand=True)
 
         # Export
         export_frame = ctk.CTkFrame(main_frame)
         export_frame.pack(padx=10, pady=5, fill="x")
-
         export_txt_btn = ctk.CTkButton(
             export_frame,
             text="Export as TXT",
@@ -235,7 +235,6 @@ class GumzoAIApp(ctk.CTk):
             width=120
         )
         export_txt_btn.pack(side="left", padx=10, pady=10)
-
         export_srt_btn = ctk.CTkButton(
             export_frame,
             text="Export as SRT",
@@ -249,6 +248,14 @@ class GumzoAIApp(ctk.CTk):
         self.status_var = tk.StringVar(value="Ready")
         status_bar = ctk.CTkLabel(self, textvariable=self.status_var, anchor="w")
         status_bar.pack(side="bottom", fill="x", padx=10, pady=5)
+
+    def toggle_file_selector(self, *args):
+        # Show file selector only if the input source is set to "File"
+        if self.input_source_var.get() == "Realtime":
+            self.file_frame.pack_forget()
+        else:
+            # Re-pack before the settings frame so the order stays consistent
+            self.file_frame.pack(padx=10, pady=10, fill="x", before=self.settings_frame)
 
     def update_model_info(self):
         model_name = self.model_var.get()
@@ -307,7 +314,6 @@ class GumzoAIApp(ctk.CTk):
                 self.process_btn.configure(state="normal")
                 self.cancel_btn.configure(state="disabled")
                 return
-
             self.status_var.set("Processing file...")
             self.processing = True
             threading.Thread(target=self.process_media, daemon=True).start()
@@ -335,7 +341,6 @@ class GumzoAIApp(ctk.CTk):
 
     def process_media(self):
         try:
-            # Convert video to audio if needed
             if self.file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
                 self.status_var.set("Converting video to audio...")
                 audio_path = self.file_path.rsplit(".", 1)[0] + ".wav"
@@ -348,10 +353,7 @@ class GumzoAIApp(ctk.CTk):
             else:
                 audio_path = self.file_path
 
-            # Get audio duration for progress calculation
             self.audio_duration = self.estimate_total_duration(audio_path)
-
-            # Model initialization
             model_key = self.model_friendly_names.get(self.model_var.get(), "small")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self.status_var.set(f"Loading {model_key} model on {device}...")
@@ -360,48 +362,39 @@ class GumzoAIApp(ctk.CTk):
             os.makedirs(download_root, exist_ok=True)
             model = WhisperModel(model_key, device=device, download_root=download_root)
 
-            # Language setup
             lang_selection = self.lang_var.get()
             target_lang = None if lang_selection == "None" else lang_selection.split("(")[-1].strip(")")
             is_english_model = ".en" in model_key
             language = "en" if is_english_model else None
 
-            # Transcription
             self.status_var.set("Starting transcription...")
             self.progress_bar.set(0.1)
-
             segment_generator, info = model.transcribe(
                 audio_path,
                 language=language,
                 beam_size=5
             )
-
             segments = list(segment_generator)
             full_transcription = " ".join([seg.text for seg in segments])
             self.transcript_text.insert("end", full_transcription)
             self.progress_bar.set(0.8)
 
-            # Translation handling
             translated_text = ""
             if target_lang and full_transcription.strip():
                 try:
-                    # Check internet connection
                     try:
                         requests.get("https://www.google.com", timeout=5)
                     except requests.ConnectionError:
                         self.translation_text.insert("end", "Translation requires internet connection")
                         return
 
-                    # Validate target language
                     supported_langs = GoogleTranslator().get_supported_languages(as_dict=True)
                     if target_lang not in supported_langs.values():
                         self.translation_text.insert("end", f"Unsupported language: {target_lang}")
                         return
 
-                    # Chunked translation
                     chunk_size = 4500
-                    chunks = [full_transcription[i:i + chunk_size]
-                              for i in range(0, len(full_transcription), chunk_size)]
+                    chunks = [full_transcription[i:i + chunk_size] for i in range(0, len(full_transcription), chunk_size)]
                     total_chunks = len(chunks)
                     translated_chunks = []
 
@@ -411,39 +404,26 @@ class GumzoAIApp(ctk.CTk):
                     for i, chunk in enumerate(chunks):
                         if self.cancel_processing:
                             break
-
                         try:
-                            translated = GoogleTranslator(
-                                source="auto",
-                                target=target_lang
-                            ).translate(chunk)
+                            translated = GoogleTranslator(source="auto", target=target_lang).translate(chunk)
                             translated_chunks.append(translated)
                         except Exception as e:
                             translated_chunks.append(f"\n[TRANSLATION ERROR IN CHUNK {i + 1}: {str(e)}]\n")
-
-                        # Update progress
                         progress = 0.8 + (0.2 * (i + 1) / total_chunks)
                         self.progress_bar.set(progress)
                         self.status_var.set(f"Translating {i + 1}/{total_chunks} chunks...")
-
-                        # Rate limiting
-                        time.sleep(1.5)  # 1.5 seconds between chunks
-
+                        time.sleep(1.5)
                     translated_text = " ".join(translated_chunks)
                     self.translation_text.insert("end", translated_text)
-
                 except Exception as e:
-                    error_msg = f"Translation failed: {str(e)}\nPossible causes:\n" \
-                                "- Service timeout\n- Invalid API response\n- Daily quota exceeded"
+                    error_msg = f"Translation failed: {str(e)}\nPossible causes:\n- Service timeout\n- Invalid API response\n- Daily quota exceeded"
                     self.translation_text.insert("end", error_msg)
 
-            # Final processing
             self.segments = segments
             self.transcription = full_transcription.strip()
             self.translation = translated_text.strip()
             self.progress_bar.set(1.0)
             self.status_var.set("Processing complete!" if not self.cancel_processing else "Processing cancelled")
-
         except Exception as e:
             self.status_var.set(f"Error: {str(e)}")
             messagebox.showerror("Error", f"Processing failed: {str(e)}")
@@ -454,11 +434,8 @@ class GumzoAIApp(ctk.CTk):
 
     def realtime_transcription(self):
         try:
-            # Setup parameters for realtime recording
-            sample_rate = 16000  # recommended sample rate for Whisper
-            duration = 5  # seconds per chunk
-
-            # Initialize model for realtime transcription
+            sample_rate = 16000
+            duration = 5
             model_key = self.model_friendly_names.get(self.model_var.get(), "small")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self.status_var.set(f"Loading {model_key} model on {device} for realtime transcription...")
@@ -466,28 +443,20 @@ class GumzoAIApp(ctk.CTk):
             download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "gumzo")
             os.makedirs(download_root, exist_ok=True)
             model = WhisperModel(model_key, device=device, download_root=download_root)
-
             self.status_var.set("Realtime transcription started. Speak into your microphone...")
             while not self.cancel_processing:
-                # Record audio from the microphone
                 self.status_var.set("Recording...")
                 recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
-                sd.wait()  # Wait until recording is finished
-
-                # Write the recording to a temporary file
+                sd.wait()
                 temp_audio_path = "temp_realtime.wav"
                 sf.write(temp_audio_path, recording, sample_rate)
-
-                # Transcribe the recorded chunk
                 self.status_var.set("Transcribing...")
                 segment_generator, info = model.transcribe(temp_audio_path, language=None, beam_size=5)
                 segments = list(segment_generator)
                 if segments:
                     chunk_text = " ".join([seg.text for seg in segments])
-                    # Append to transcript text box
                     self.transcript_text.insert("end", chunk_text + "\n")
                     self.transcript_text.see("end")
-                    # If translation is selected, translate this chunk
                     lang_selection = self.lang_var.get()
                     if lang_selection != "None":
                         target_lang = lang_selection.split("(")[-1].strip(")")
@@ -498,7 +467,6 @@ class GumzoAIApp(ctk.CTk):
                         except Exception as e:
                             self.translation_text.insert("end", f"\n[Translation Error: {str(e)}]\n")
                             self.translation_text.see("end")
-                # Small pause before the next recording
                 time.sleep(0.2)
             self.status_var.set("Realtime transcription stopped.")
         except Exception as e:
@@ -513,23 +481,19 @@ class GumzoAIApp(ctk.CTk):
         if not self.transcription:
             messagebox.showinfo("Export", "No transcription available to export.")
             return
-
         try:
             file_path = filedialog.asksaveasfilename(
                 defaultextension=".txt",
                 filetypes=[("Text Files", "*.txt")],
                 initialfile=os.path.basename(self.file_path).rsplit(".", 1)[0] + "_transcript.txt"
             )
-
             if not file_path:
                 return
-
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(self.transcription)
                 if self.translation:
                     f.write("\n\n--- TRANSLATION ---\n\n")
                     f.write(self.translation)
-
             messagebox.showinfo("Export", f"Exported to {file_path}")
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export: {str(e)}")
@@ -538,23 +502,19 @@ class GumzoAIApp(ctk.CTk):
         if not self.segments:
             messagebox.showinfo("Export", "No segments available for SRT export.")
             return
-
         try:
             file_path = filedialog.asksaveasfilename(
                 defaultextension=".srt",
                 filetypes=[("SRT Files", "*.srt")],
                 initialfile=os.path.basename(self.file_path).rsplit(".", 1)[0] + ".srt"
             )
-
             if not file_path:
                 return
-
             with open(file_path, 'w', encoding='utf-8') as f:
                 for i, seg in enumerate(self.segments, 1):
                     start = self.format_srt_time(seg.start)
                     end = self.format_srt_time(seg.end)
                     f.write(f"{i}\n{start} --> {end}\n{seg.text}\n\n")
-
             messagebox.showinfo("Export", f"SRT file exported to {file_path}")
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to export SRT: {str(e)}")
