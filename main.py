@@ -1,3 +1,4 @@
+import requests
 import torch
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -134,12 +135,14 @@ class GumzoAIApp(ctk.CTk):
 
         lang_label = ctk.CTkLabel(lang_frame, text="Translate to:")
         lang_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+        # Get supported languages as {name: code} dictionary
+        lang_dict = GoogleTranslator().get_supported_languages(as_dict=True)
 
-        languages = ["None", "English (en)", "French (fr)", "Spanish (es)", "German (de)",
-                   "Chinese (zh)", "Arabic (ar)", "Russian (ru)", "Swahili (sw)",
-                   "Japanese (ja)", "Korean (ko)", "Portuguese (pt)", "Italian (it)",
-                   "Dutch (nl)", "Hindi (hi)", "Turkish (tr)", "Thai (th)", "Vietnamese (vi)"]
-
+        # Generate formatted list sorted alphabetically
+        languages = ["None"] + [
+            f"{name} ({code})"
+            for name, code in sorted(lang_dict.items(), key=lambda x: x[0])
+        ]
         lang_dropdown = ctk.CTkOptionMenu(lang_frame, variable=self.lang_var, values=languages, width=150)
         lang_dropdown.grid(row=0, column=1, padx=10, pady=10, sticky="w")
 
@@ -312,7 +315,12 @@ class GumzoAIApp(ctk.CTk):
             if self.file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov')):
                 self.status_var.set("Converting video to audio...")
                 audio_path = self.file_path.rsplit(".", 1)[0] + ".wav"
-                subprocess.run(["ffmpeg", "-i", self.file_path, "-q:a", "0", "-map", "a", audio_path, "-y"], check=True)
+                subprocess.run(
+                    ["ffmpeg", "-i", self.file_path, "-q:a", "0", "-map", "a", audio_path, "-y"],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
             else:
                 audio_path = self.file_path
 
@@ -326,7 +334,7 @@ class GumzoAIApp(ctk.CTk):
             default = os.path.join(os.path.expanduser("~"), ".cache")
             download_root = os.path.join(os.getenv("XDG_CACHE_HOME", default), "gumzo")
             os.makedirs(download_root, exist_ok=True)
-            model = WhisperModel(model_key, device=device,download_root=download_root)
+            model = WhisperModel(model_key, device=device, download_root=download_root)
 
             # Language setup
             lang_selection = self.lang_var.get()
@@ -334,15 +342,9 @@ class GumzoAIApp(ctk.CTk):
             is_english_model = ".en" in model_key
             language = "en" if is_english_model else None
 
-            # Transcription parameters
-            stream_mode = self.stream_var.get()
+            # Transcription
             self.status_var.set("Starting transcription...")
             self.progress_bar.set(0.1)
-
-            # Process transcription
-            full_transcription = ""
-            translated_text = ""
-            segments = []
 
             segment_generator, info = model.transcribe(
                 audio_path,
@@ -350,26 +352,68 @@ class GumzoAIApp(ctk.CTk):
                 beam_size=5
             )
 
-            # Convert generator to list before processing
             segments = list(segment_generator)
             full_transcription = " ".join([seg.text for seg in segments])
-
-            # Update UI once
             self.transcript_text.insert("end", full_transcription)
+            self.progress_bar.set(0.8)
 
-            # Translation after full transcription
+            # Translation handling
+            translated_text = ""
             if target_lang and full_transcription.strip():
                 try:
-                    translated_text = GoogleTranslator(
-                        source="auto",
-                        target=target_lang
-                    ).translate(full_transcription)
-                    self.translation_text.insert("end", translated_text)
-                except Exception as e:
-                    translated_text = f"Translation error: {str(e)}"
+                    # Check internet connection
+                    try:
+                        requests.get("https://www.google.com", timeout=5)
+                    except requests.ConnectionError:
+                        self.translation_text.insert("end", "Translation requires internet connection")
+                        return
+
+                    # Validate target language
+                    supported_langs = GoogleTranslator().get_supported_languages(as_dict=True)
+                    if target_lang not in supported_langs.values():
+                        self.translation_text.insert("end", f"Unsupported language: {target_lang}")
+                        return
+
+                    # Chunked translation
+                    chunk_size = 4500
+                    chunks = [full_transcription[i:i + chunk_size]
+                              for i in range(0, len(full_transcription), chunk_size)]
+                    total_chunks = len(chunks)
+                    translated_chunks = []
+
+                    self.status_var.set(f"Translating 0/{total_chunks} chunks...")
+                    self.progress_bar.set(0.8)
+
+                    for i, chunk in enumerate(chunks):
+                        if self.cancel_processing:
+                            break
+
+                        try:
+                            translated = GoogleTranslator(
+                                source="auto",
+                                target=target_lang
+                            ).translate(chunk)
+                            translated_chunks.append(translated)
+                        except Exception as e:
+                            translated_chunks.append(f"\n[TRANSLATION ERROR IN CHUNK {i + 1}: {str(e)}]\n")
+
+                        # Update progress
+                        progress = 0.8 + (0.2 * (i + 1) / total_chunks)
+                        self.progress_bar.set(progress)
+                        self.status_var.set(f"Translating {i + 1}/{total_chunks} chunks...")
+
+                        # Rate limiting
+                        time.sleep(1.5)  # 1.5 seconds between chunks
+
+                    translated_text = " ".join(translated_chunks)
                     self.translation_text.insert("end", translated_text)
 
-            # Final updates
+                except Exception as e:
+                    error_msg = f"Translation failed: {str(e)}\nPossible causes:\n" \
+                                "- Service timeout\n- Invalid API response\n- Daily quota exceeded"
+                    self.translation_text.insert("end", error_msg)
+
+            # Final processing
             self.segments = segments
             self.transcription = full_transcription.strip()
             self.translation = translated_text.strip()
@@ -383,7 +427,6 @@ class GumzoAIApp(ctk.CTk):
             self.processing = False
             self.process_btn.configure(state="normal")
             self.cancel_btn.configure(state="disabled")
-
     def export_txt(self):
         if not self.transcription:
             messagebox.showinfo("Export", "No transcription available to export.")
