@@ -528,7 +528,6 @@ class GumzoAIApp(ctk.CTk):
         minutes, seconds = divmod(remainder, 60)
         milliseconds = int((seconds % 1) * 1000)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
-
 def main():
     app = GumzoAIApp()
     app.mainloop()
